@@ -28,6 +28,3 @@ Thumbs.db
 *.log
 *.dat
 *.fits
-
-# Archive folder for old versioned files
-archive/
