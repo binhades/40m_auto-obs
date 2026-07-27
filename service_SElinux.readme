@@ -1,0 +1,8 @@
+# Apply the bin_t label to your new venv executables
+sudo chcon -R -t bin_t /home/obs/venv/observe/bin/
+
+# Reload systemd to be safe
+sudo systemctl daemon-reload
+
+# Restart the service
+sudo systemctl restart fast-obs-sche

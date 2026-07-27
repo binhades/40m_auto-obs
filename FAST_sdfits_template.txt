@@ -1,0 +1,108 @@
+# The FAST telescope SDFITS Definition File (Ver 0.8, 2023-11-28)
+#
+###############################################################################
+#
+# Primary Header-Data Unit
+#
+###############################################################################
+#
+SIMPLE  =                    T / File does conform to FITS standard
+BITPIX  =                    8 / Number of bits per data pixel
+NAXIS   =                    0 / Number of data axes
+EXTEND  =                    T / FITS dataset may contain extensions
+FITSVER = '0.8'                / FAST SDFITs format revision number
+ORIGIN  = 'FAST, NAOC'         / Origin of observation
+DATE    = '2015-11-11T08:56:26Z' / File creation date (YYYY-MM-DDThh:mm:ss UTC)
+COMMENT                        / The data contain line data and continuum data
+END
+#
+###############################################################################
+#
+# Single Dish Binary Table Extension
+#
+###############################################################################
+#
+XTENSION= 'BINTABLE'           / Binary table extension
+BITPIX  =                    8 / 8-bit bytes
+NAXIS   =                    2 / 2-dimensional binary table
+NAXIS1  =                    0 / Width of table in bytes
+NAXIS2  =                    0 / Number of rows in table
+PCOUNT  =                    0 / Size of special data area
+GCOUNT  =                    1 / One data group (required keyword)
+TFIELDS =                    0 / Number of fields in each row
+EXTNAME = 'SINGLE DISH'        / Name of this binary table extension
+TELESCOP= 'FAST'               / Telescope name
+BANDWID =   500000000.0        / Total bandwidth (Hz)
+INSTRUME= 'MBSPEC'             / Instrument name
+OBSERVER= 'observer name'      / Observer name(s)
+PROJID  = '180444-50_327a'     / Project name
+OBJECT  = 'Orion'              / Source name (only one source in a file)
+UT-LST  =                    8 / Offset between UT and LST
+LINE    = 'OH,HI'              / Names of lines
+#
+NMATRIX =                    1 / Number of DATA arrays
+OBSGEO-X=         −1668557.207 / [m] Antenna ITRF X-coordinate (spherical center)
+OBSGEO-Y=          5506838.527 / [m] Antenna ITRF Y-coordinate (spherical center)
+OBSGEO-Z=          2744934.966 / [m] Antenna ITRF Z-coordinate (spherical center)
+CTYPE1  = 'FREQ'               / DATA array axis 1: frequency in Hz
+CTYPE2  = 'STOKES'             / DATA array axis 2: polarization code
+CRPIX2  =                  1.0 / Polarization code reference pixel
+CRVAL2  =                 -5.0 / Polarization code at reference pixel
+CDELT2  =                 -1.0 / Polarization code axis increment
+CTYPE3  = 'RA'                 / DATA array axis 3 (degenerate):RA (mid-int)
+CRPIX3  =                  1.0 / RA reference pixel
+CDELT3  =                 -1.0 / RA axis increment
+CTYPE4  = 'DEC'                / DATA array axis 4 (degenerate):Dec (mid-int)
+CRPIX4  =                  1.0 / Dec reference pixel
+CDELT4  =                  1.0 / Dec axis increment
+SPECSYS = 'LSRK'               / Doppler reference frame (transformed)
+SSYSOBS = 'TOPOCENT'           / Doppler reference frame of observation
+EQUINOX =               2000.0 / Equinox of equatorial coordinates
+RADESYS = 'FK5'                / Equatorial coordinate frame
+#
+# Data table defination
+#
+TTYPE#  = 'OBSNUM'             / Observation number
+TFORM#  = '1K'                 / 64-bit Integer
+TTYPE#  = 'SCAN'               / Scan number
+TFORM#  = '1K'                 / 64-bit Integer
+TTYPE#  = 'OBSTYPE'            / Type of observation (ON, OFF, Calibration)
+TFORM#  = '16A'                / 16 characters
+TTYPE#  = 'QUALITY'            / Quality of the data (unusable F, Usable T)
+TFORM#  = '1L'                 / Logical
+TTYPE#  = 'UTOBS'              / [s] The observation time (UT) of this spectrum
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'DATE-OBS'           / Date of observation CORE (UTC)
+TFORM#  = '24A'                / YYYY-MM-DDThh:mm:ss.xxxZ
+TTYPE#  = 'OBJ_RA'             / [s] The Right ascension of the object
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'OBJ_DEC'            / [s] The Declination of the object
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'OFF_RA'             / [deg] Offset in Right ascension
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'OFF_DEC'            / [deg] Offset in Declination
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'TSYS'               / [K] System temperature
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'EXPOSURE'           / [s] Integration duration time
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'NCHAN'              / Number of channels
+TFORM#  = '1K'                 / 64-bit Integer
+TTYPE#  = 'FREQ'               / [MHz] Sky frequency of the center of the first spectrum channel
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'CHAN_BW'            / [MHz] Frequency step by channel
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'BEAM_EFF'           / Telescope beam efficiency
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'PRESSURE'           / [Pa] Environmental pressure
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'TAMBIENT'           / [K] Environmental temperature
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'WINDSPD'            / [m/s] Wind speed
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'WINDDIR'            / [degree] wind direction (E=0, S=90)
+TFORM#  = '1D'                 / Double
+TTYPE#  = 'DATA'               / Integration data table
+TDIM#   = '(4,*)'              / Dimensions (4,NCHAN)
+TFORM#  = 'E'                  / Single precision floating point (32-bit)
+END

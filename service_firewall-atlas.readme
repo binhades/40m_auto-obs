@@ -1,0 +1,22 @@
+[obs@atlas .ssh]$ sudo firewall-cmd --zone=work --add-port=8080/tcp --permanent # for scheduler
+[obs@atlas .ssh]$ sudo firewall-cmd --zone=work --add-port=80/tcp --permanent  # for controler
+success
+[obs@atlas .ssh]$ sudo firewall-cmd --reload
+success
+
+
+------
+The error [Errno 13] permission denied occurs because, in Linux, ports below 1024 (like Port 80) are Privileged Ports. Only the root user can open them.
+
+Since you are running the script as the user obs (not root), the operating system blocks the request.
+
+Here are the two best ways to fix this without compromising security.
+-----
+# Forward Port 80 -> 8081 in the 'work' zone
+sudo firewall-cmd --zone=work --add-forward-port=port=80:proto=tcp:toport=8081 --permanent
+
+# Open Port 80 itself
+sudo firewall-cmd --zone=work --add-port=80/tcp --permanent
+
+# Reload to apply
+sudo firewall-cmd --reload

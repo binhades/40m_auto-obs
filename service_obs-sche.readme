@@ -1,0 +1,40 @@
+On atlas:
+
+vi /etc/systemd/system/fast-obs-sche.service
+
+sudo systemctl daemon-reload
+sudo systemctl enable  fast-obs-sche
+sudo systemctl start   fast-obs-sche
+sudo systemctl restart fast-obs-sche
+sudo systemctl status  fast-obs-sche
+
+
+=============== fast-obs-sche.service ============
+[Unit]
+Description=FAST Observation Scheduler
+After=network.target
+
+[Service]
+# 1. USER CONFIGURATION (Update 'bliu' to your actual username)
+User=obs
+Group=obs
+
+# 2. PATH CONFIGURATION (Update to your actual scripts folder)
+WorkingDirectory=/home/obs/observe
+ExecStart=/home/obs/venv/observe/bin/python3 /home/obs/observe/obs_scheduler.py
+
+# 3. CRITICAL NETWORK FIX
+# We explicitly unset these variables so the server doesn't try
+# to route its web traffic through the SOCKS proxy.
+Environment="http_proxy="
+Environment="https_proxy="
+Environment="HTTP_PROXY="
+Environment="HTTPS_PROXY="
+
+# 4. Restart Policy
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+==========================================

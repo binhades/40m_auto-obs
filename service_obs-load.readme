@@ -1,0 +1,41 @@
+On atlas:
+
+vi /etc/systemd/system/obs-ctrl.service
+
+sudo systemctl daemon-reload
+sudo systemctl enable  fast-obs-ctrl
+sudo systemctl start   fast-obs-ctrl
+sudo systemctl restart fast-obs-ctrl
+sudo systemctl status  fast-obs-ctrl
+
+
+=============== obs-ctrl.service ============
+[obs@atlas observe]$ cat /etc/systemd/system/fast-obs-ctrl.service
+[Unit]
+Description=FAST Observation Controller
+After=network.target
+
+[Service]
+# 1. USER CONFIGURATION (Update 'bliu' to your actual username)
+User=obs
+Group=obs
+
+# 2. PATH CONFIGURATION (Update to your actual scripts folder)
+WorkingDirectory=/home/obs/observe
+ExecStart=/home/obs/venv/observe/bin/python3 /home/obs/observe/obs_controller.py
+
+# 3. CRITICAL NETWORK FIX
+# We explicitly unset these variables so the server doesn't try
+# to route its web traffic through the SOCKS proxy.
+Environment="http_proxy="
+Environment="https_proxy="
+Environment="HTTP_PROXY="
+Environment="HTTPS_PROXY="
+
+# 4. Restart Policy
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+==========================================
