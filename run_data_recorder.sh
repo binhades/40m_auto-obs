@@ -84,10 +84,11 @@ esac
 timestamp_utc=$(date -d "$timestamp CST" -u +%Y%m%dT%H%M%SZ)
 day_dir=$(date -d "$timestamp" +%Y%m%d)
 
+
 if [ "$bb_en" = true ]; then
-    save_dir="${DATA_ROOT}/baseband_40m/${proj_id}/${day_dir}"
+    save_dir="${DATA_ROOT}/baseband_40m/${proj_id}/${source_name}/${day_dir}"
 else
-    save_dir="${DATA_ROOT}/${proj_id}/${day_dir}"
+    save_dir="${DATA_ROOT}/${proj_id}/${source_name}/${day_dir}"
 fi
 mkdir -p "$save_dir"
 
