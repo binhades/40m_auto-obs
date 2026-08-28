@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==================================================================
 # FAST Core Array - Data Recorder
-# Version: v0.1.6
-# Updates: Baseband Data to different Folder
+# Version: v0.1.7
+# Updates: SIGHUP trap + pre-flight cleanup waits for stale exit
 # ==================================================================
 
 # --- TERMINATION TRAP ---
@@ -10,7 +10,9 @@ cleanup() {
     echo "[WORKER] Catching signal... cleaning up children."
     kill $(jobs -p) 2>/dev/null
 }
-trap cleanup SIGINT SIGTERM EXIT
+# SIGHUP: fired when the parent SSH session drops. Without it the receivers
+# orphan and keep holding the multicast sockets (CA03 incident 2026-08-24..28).
+trap cleanup SIGHUP SIGINT SIGTERM EXIT
 
 DATA_ROOT="${DATA0:-/disk}"
 LOG_ROOT="${HOME}/log"
@@ -102,6 +104,25 @@ MC_MAP["CA04"]="239.3.73.1:239.3.73.2:239.3.73.3:239.3.73.4"
 
 # --- EXECUTION FUNCTIONS ---
 
+# Kill a stale receiver and WAIT for it to release its sockets.
+# Without the wait the new receiver can hit "bind(): Address already in use"
+# (seen on a02 2026-08-28 11:44 when a 4-day-old orphaned bbrec was killed).
+kill_stale() {
+    local pattern=$1
+    pkill -f "$pattern" 2>/dev/null || return 0
+    for i in $(seq 1 30); do
+        pgrep -f "$pattern" > /dev/null 2>&1 || return 0
+        sleep 0.1
+    done
+    echo "[WORKER] Escalating to SIGKILL for stale: $pattern"
+    pkill -9 -f "$pattern" 2>/dev/null
+    for i in $(seq 1 30); do
+        pgrep -f "$pattern" > /dev/null 2>&1 || return 0
+        sleep 0.1
+    done
+    echo "[WORKER] WARNING: stale process survived SIGKILL: $pattern"
+}
+
 run_mbspec() {
     local ant=$1
     local core=$2
@@ -134,7 +155,7 @@ run_mbspec() {
     
     # --- TARGETED PRE-FLIGHT CLEANUP ---
     # Only kill mbspec processes related to THIS antenna
-    pkill -f "mbspec .*_${ant}_" 
+    kill_stale "mbspec .*_${ant}_"
     
     echo "[WORKER] Launching mbspec for $ant (CPU: $core, GPU: $gpu)..." >> "$active_log"
     
@@ -159,19 +180,19 @@ run_specrecv() {
     
     IFS=':' read px py sx sy <<< "${MC_MAP[$ant]}"
     
-    # Cleanup only this antenna
-    pkill -f "specrecv .*_${ant}_"
+    # Cleanup only this antenna (matches specrecv AND specrecv2)
+    kill_stale "specrecv2? .*_${ant}_"
     
     echo "[WORKER] Launching specrecv for $ant (CPU: $core)..." >> "$active_log"
 
     if [ "$psr_mode" == "Stokes" ]; then
-    	local fits_args="${observer},${source_name},${proj_id},${ra},${dec},FAST_CA,${receiver},MB4k,LIN,1250,500"
+    	local fits_args="${observer},${source_name},${proj_id},${ra},${dec},FAST_${ant},${receiver},MB4k,LIN,1250,500"
         ./specrecv2 "${LOCAL_RECV_IP}@${core}" "${px}:12345" \
             "${LOCAL_RECV_IP}@$((core+1))" "${py}:12345" \
             "$fname" 4096 $psr_acc 1 0-4095 1024 8192 $total_subints 1 1 "$fits_args" \
             >> "$active_log" 2>&1 &
     else
-    	local fits_args="${observer},${source_name},${proj_id},${ra},${dec},FAST_CA,${receiver},LIN,1250,500"
+    	local fits_args="${observer},${source_name},${proj_id},${ra},${dec},FAST_${ant},${receiver},LIN,1250,500"
         ./specrecv "${LOCAL_RECV_IP}@${core}" "${px}:12345" \
             "$fname" 4096 $psr_acc 1 0-4095 1024 8192 $total_subints 1 1 "$fits_args" \
             >> "$active_log" 2>&1 &
@@ -192,7 +213,7 @@ run_bbrec() {
     IFS=':' read px py sx sy <<< "${MC_MAP[$ant]}"
     
     # Cleanup only this antenna
-    pkill -f "bbrec .*_${ant}_"
+    kill_stale "bbrec .*_${ant}_"
 
     echo "[WORKER] Launching bbrec for $ant (CPU: $core)..." >> "$active_log"
     

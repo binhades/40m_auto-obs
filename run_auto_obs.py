@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ==================================================================
 # FAST Core Array - Concurrent Python Driver
-# Version: v0.1.5
-# Updates: Uses roach_tools.py with config injection
+# Version: v0.1.6
+# Updates: Remote worker cleanup on abort; reap worker ssh sessions
 # ==================================================================
 
 import asyncio
@@ -26,6 +26,7 @@ import roach_tools # <--- Pure Library
 
 # --- GLOBAL TRACKING ---
 active_subprocesses = set()
+dry_run_mode = False
 session_log_path = obs_utils.LOG_DIR / f"driver_session_{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
 def log(msg):
@@ -83,10 +84,11 @@ class ObservationTask:
             
             # 2. Disk Check & Config
             if not self.dry_run:
-                target_host = obs_utils.ANTENNA_HOST_MAP.get(self.ants[0])
-                if target_host and not await check_remote_disk(target_host):
-                    log(f"Task {self.index} ABORTED: Disk Full on {target_host}")
-                    return
+                target_hosts = {obs_utils.ANTENNA_HOST_MAP[a] for a in self.ants if a in obs_utils.ANTENNA_HOST_MAP}
+                for target_host in sorted(target_hosts):
+                    if not await check_remote_disk(target_host):
+                        log(f"Task {self.index} ABORTED: Disk Full on {target_host}")
+                        return
 
                 # RUN CONFIG in Thread Pool
                 loop = asyncio.get_running_loop()
@@ -105,7 +107,7 @@ class ObservationTask:
                     log(f"[DRY] Would launch on {host}: {cmd}")
                 else:
                     proc = await asyncio.create_subprocess_exec(
-                        "ssh", f"{os.environ['USER']}@{host}", cmd,
+                        "ssh", "-n", f"{os.environ['USER']}@{host}", cmd,
                         stdout=asyncio.subprocess.DEVNULL,
                         stderr=asyncio.subprocess.DEVNULL
                     )
@@ -219,7 +221,7 @@ class ObservationTask:
         
         cmd = f"{obs_utils.WORKER_SCRIPT} -s \"{d['source']}\" -t \"{self.start_str}\" -d {self.duration} -a \"{ant_str}\" -B \"{','.join(backends)},\""
         cmd += f" -p \"{d['project_id']}\" -o \"{d['observer']}\" -R \"{d['ra']}\" -D \"{d['dec']}\" -r \"{d['receiver']}\" -M \"{d['mode']}\""
-        cmd += f" --psr_mode \"{d.get('psr_mode')}\" --spec_mode \"{d.get('spec_mode')}\""
+        cmd += f" --psr_mode \"{d.get('psr_mode') or '2-Pols'}\" --spec_mode \"{d.get('spec_mode') or 'F'}\""
         
         if d.get('spec_enabled'):
             integ = d.get('spec_integ')
@@ -263,18 +265,35 @@ def cleanup(sig, frame):
     for proc in list(active_subprocesses):
         try:
             proc.terminate()
-            log(f"Killed subprocess PID {proc.pid}")
+            log(f"Killed ssh subprocess PID {proc.pid}")
         except Exception: pass
+
+    # Kill remote recorders; their SIGHUP/SIGTERM trap kills the receiver
+    # children. Without this, an abort leaves receivers running on a01/a02.
+    # Skipped in dry-run so a simulation cannot kill real receivers.
+    if not dry_run_mode:
+        user = os.environ.get('USER', '')
+        for host in sorted(set(obs_utils.ANTENNA_HOST_MAP.values())):
+            try:
+                subprocess.run(
+                    ["ssh", "-o", "ConnectTimeout=3", f"{user}@{host}",
+                     "pkill -f run_data_recorder.sh; killall -q -9 mbspec specrecv specrecv2 bbrec"],
+                    timeout=8, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                log(f"Remote cleanup done on {host}")
+            except Exception as e:
+                log(f"Remote cleanup on {host} failed: {e}")
+
     sys.exit(0)
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, cleanup)
-    signal.signal(signal.SIGTERM, cleanup)
-    
     parser = argparse.ArgumentParser()
     parser.add_argument("schedule_file")
     parser.add_argument("--dry-run", action="store_true", help="Simulate without executing")
     args = parser.parse_args()
+    dry_run_mode = args.dry_run
+
+    signal.signal(signal.SIGINT, cleanup)
+    signal.signal(signal.SIGTERM, cleanup)
     
     # Optional: Check System Clock
     try:

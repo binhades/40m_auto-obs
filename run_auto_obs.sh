@@ -1,12 +1,12 @@
 #!/bin/bash
 # ==================================================================
 # FAST Core Array - Observation Driver
-# Version: v0.2.6
-# Updates: Decoupled Script Version from Data Schema Version
+# Version: v0.2.7
+# Updates: Duration m/h support, null-safe modes, SIGHUP, disk check
 # ==================================================================
 
 # --- CONFIGURATION ---
-DRIVER_VERSION="v0.2.6"          # The version of THIS script
+DRIVER_VERSION="v0.2.7"          # The version of THIS script
 SUPPORTED_DATA_VERSION="v0.1.0"  # The JSON format version this script understands
 
 JSON_FILE="${1:-${HOME}/schedule/schedule.json}"
@@ -42,7 +42,7 @@ cleanup() {
     done
     exit 1
 }
-trap cleanup SIGINT SIGTERM
+trap cleanup SIGHUP SIGINT SIGTERM
 
 # --- CHECKS ---
 if ! command -v jq &> /dev/null; then echo "Error: 'jq' missing."; exit 1; fi
@@ -95,14 +95,20 @@ for (( i=0; i<$task_count; i++ )); do
     receiver=$(jq -r ".schedule[$i].receiver" "$JSON_FILE")
     obs_mode=$(jq -r ".schedule[$i].mode" "$JSON_FILE")
     start_time=$(jq -r ".schedule[$i].start_time_cst" "$JSON_FILE")
-    duration_str=$(jq -r ".schedule[$i].duration" "$JSON_FILE"); duration=${duration_str%s}
+    # Duration may be given in s/m/h (GUI scheduler emits any of these)
+    duration_str=$(jq -r ".schedule[$i].duration" "$JSON_FILE")
+    case "$duration_str" in
+        *m) duration=$(( ${duration_str%m} * 60 )) ;;
+        *h) duration=$(( ${duration_str%h} * 3600 )) ;;
+        *)  duration=${duration_str%s} ;;
+    esac
     
     spec_en=$(jq -r ".schedule[$i].spec_enabled" "$JSON_FILE")
     spec_integ=$(jq -r ".schedule[$i].spec_integ" "$JSON_FILE")
     spec_mode=$(jq -r ".schedule[$i].spec_mode // \"F\"" "$JSON_FILE")
     psr_en=$(jq -r ".schedule[$i].psr_enabled" "$JSON_FILE")
     psr_integ=$(jq -r ".schedule[$i].psr_integ" "$JSON_FILE")
-    psr_mode=$(jq -r ".schedule[$i].psr_mode" "$JSON_FILE")
+    psr_mode=$(jq -r ".schedule[$i].psr_mode // \"2-Pols\"" "$JSON_FILE")
     bb_en=$(jq -r ".schedule[$i].baseband_enabled" "$JSON_FILE")
     cal_on=$(jq -r ".schedule[$i].cal_on" "$JSON_FILE")
     cal_off=$(jq -r ".schedule[$i].cal_off" "$JSON_FILE")
@@ -141,6 +147,16 @@ for (( i=0; i<$task_count; i++ )); do
         if [[ "$ant" == "CA03" ]] || [[ "$ant" == "CA04" ]]; then use_a02=true; ants_a02+="$ant "; fi
         roach_list+="${ROACH_HOSTS[$ant]} "
     done
+
+    # 3b. DISK CHECK on every node this task uses (skip task if >95%)
+    if [ "$use_a01" = true ] && ! ssh -o ConnectTimeout=3 ${USER}@a01 "df --output=pcent /disk | tail -1 | tr -d ' %'" | grep -qxE '([0-9]|[1-8][0-9]|9[0-4])' 2>/dev/null; then
+        echo "[CRITICAL] Disk full or unreachable on a01. Skipping task $((i+1))."
+        continue
+    fi
+    if [ "$use_a02" = true ] && ! ssh -o ConnectTimeout=3 ${USER}@a02 "df --output=pcent /disk | tail -1 | tr -d ' %'" | grep -qxE '([0-9]|[1-8][0-9]|9[0-4])' 2>/dev/null; then
+        echo "[CRITICAL] Disk full or unreachable on a02. Skipping task $((i+1))."
+        continue
+    fi
 
     # 4. TIMING
     target_unix=$(date -d "$start_time CST" +%s)
@@ -186,7 +202,7 @@ for (( i=0; i<$task_count; i++ )); do
             cmd="$cmd --psr_params \"$psr_args\""
         fi
         
-        ssh ${USER}@$host "$cmd" &
+        ssh -n ${USER}@$host "$cmd" &
     }
 
     if [ "$use_a01" = true ]; then launch_worker "a01" "$ants_a01"; pid_a01=$!; fi
