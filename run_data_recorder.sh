@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==================================================================
 # FAST Core Array - Data Recorder
-# Version: v0.1.7
-# Updates: SIGHUP trap + pre-flight cleanup waits for stale exit
+# Version: v0.1.8
+# Updates: Watchdog: kill receivers on NO-DATA or past end+60s
 # ==================================================================
 
 # --- TERMINATION TRAP ---
@@ -164,8 +164,9 @@ run_mbspec() {
         "${LOCAL_RECV_IP}@$((core+0))" "${sx}:12345" \
         "${LOCAL_RECV_IP}@$((core+1))" "${sy}:12345" \
         >> "$active_log" 2>&1 &
-        
+
     pids+=($!)
+    ant_type_pid["${ant}:spec"]=$!
 }
 
 run_specrecv() {
@@ -198,6 +199,7 @@ run_specrecv() {
             >> "$active_log" 2>&1 &
      fi
     pids+=($!)
+    ant_type_pid["${ant}:psr"]=$!
 }
 
 run_bbrec() {
@@ -223,10 +225,12 @@ run_bbrec() {
         "${LOCAL_RECV_IP}@$((core+1))" "${sy}:12345" \
         >> "$active_log" 2>&1 &
     pids+=($!)
+    ant_type_pid["${ant}:bb"]=$!
 }
 
 # --- MAIN LOOP ---
 pids=()
+declare -A ant_type_pid   # "ant:backend" -> receiver pid (used by watchdog)
 
 # Log Setup
 for ant in $antennas; do
@@ -234,6 +238,66 @@ for ant in $antennas; do
     if [ "$psr_en" = true ]; then setup_log "$ant" "psr"; fi
     if [ "$bb_en" = true ]; then setup_log "$ant" "bb"; fi
 done
+
+# --- WATCHDOG ---
+# The receivers are quota-driven: they exit only after receiving an expected
+# byte/row count and have NO internal timeout. If the ROACH->worker link dies
+# (e.g. 10GbE port down), they wait forever, this script never finishes, and
+# the whole schedule on atlas stalls. Evidence: a CA03 bbrec orphaned on a02
+# 2026-08-24..28 receiving 0 bytes for 4 days. Two guards:
+#   NO-DATA:      still at zero bytes at T0+45s -> multicast link is dead, kill it
+#   HARD TIMEOUT: still running at T0+duration+60s -> kill whatever is left
+watchdog() {
+    local t0_unix=$(date -d "$timestamp CST" +%s)
+    local no_data_deadline=$(( t0_unix + 45 ))
+    local hard_deadline=$(( t0_unix + duration + 60 ))
+    local now key pid ant type logf pattern
+
+    while :; do
+        now=$(date +%s)
+        [ $now -ge $no_data_deadline ] && break
+        [ $now -ge $hard_deadline ] && return
+        sleep 2
+    done
+
+    for key in "${!ant_type_pid[@]}"; do
+        pid=${ant_type_pid[$key]}
+        kill -0 "$pid" 2>/dev/null || continue
+        ant=${key%%:*}; type=${key##*:}
+        logf="${LOG_ROOT}/active_${type}_${ant}.log"
+        if ! grep -qE 'R: *[1-9]' "$logf" 2>/dev/null; then
+            echo "[WORKER] WATCHDOG: no data from $ant/$type by T0+45s (multicast link down?) - killing receiver." >> "$logf"
+            case $type in
+                spec) pattern="mbspec .*_${ant}_" ;;
+                psr)  pattern="specrecv2? .*_${ant}_" ;;
+                bb)   pattern="bbrec .*_${ant}_" ;;
+            esac
+            kill -9 "$pid" 2>/dev/null
+            pkill -9 -f "$pattern" 2>/dev/null
+        fi
+    done
+
+    while :; do
+        now=$(date +%s)
+        [ $now -ge $hard_deadline ] && break
+        sleep 2
+    done
+
+    for key in "${!ant_type_pid[@]}"; do
+        pid=${ant_type_pid[$key]}
+        kill -0 "$pid" 2>/dev/null || continue
+        ant=${key%%:*}; type=${key##*:}
+        logf="${LOG_ROOT}/active_${type}_${ant}.log"
+        echo "[WORKER] WATCHDOG: $ant/$type still running at T0+${duration}s+60 - killing." >> "$logf"
+        case $type in
+            spec) pattern="mbspec .*_${ant}_" ;;
+            psr)  pattern="specrecv2? .*_${ant}_" ;;
+            bb)   pattern="bbrec .*_${ant}_" ;;
+        esac
+        kill -9 "$pid" 2>/dev/null
+        pkill -9 -f "$pattern" 2>/dev/null
+    done
+}
 
 # Launch Loop
 for ant in $antennas; do
@@ -256,5 +320,8 @@ for ant in $antennas; do
     if [ "$bb_en" = true ]; then run_bbrec "$ant" "$((base_cpu + 4))"; fi
 done
 
-for pid in "${pids[@]}"; do wait $pid; done
+watchdog &
+watchdog_pid=$!
+
+for pid in "${pids[@]}"; do wait $pid || true; done
 echo "[WORKER] Finished."
