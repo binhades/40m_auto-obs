@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 # --- VERSION CONTROL ---
-CONTROLLER_VERSION = "v0.3.6 (Scroll Fix)"
+CONTROLLER_VERSION = "v0.3.7 (Active Driver Log)"
 
 # --- IMPORTS ---
 current_dir = Path(__file__).parent.resolve()
@@ -33,18 +33,19 @@ global_state = GlobalState()
 
 # --- HELPER 1: Log Parsing & Streaming (Local) ---
 class LogReader:
-    def __init__(self, filepath, ui_log_element, parse_status=False, status_callback=None):
+    def __init__(self, filepath, ui_log_element, parse_status=False, status_callback=None, start_at_end=False):
         self.filepath = Path(filepath)
         self.ui_log = ui_log_element
         self.file = None
         self.inode = None
         self.parse_status = parse_status
         self.status_callback = status_callback
-        
         self.re_start = re.compile(r"--- Task (\d+): .* Started ---")
         self.re_finish = re.compile(r"Task (\d+): Finished")
-        self.re_abort = re.compile(r"Task (\d+): .* ABORTED")
-        self.re_error = re.compile(r"Task (\d+): .* ERROR")
+        self.re_error = re.compile(r"Task (\d+):? (ERROR|ABORTED|CANCELLED)")
+        self.re_engine = re.compile(r"Loaded \d+ tasks\. Engine Start")
+        self.start_at_end = start_at_end
+        self.first_open = True
 
     def read(self):
         if not self.filepath.exists(): return
@@ -54,10 +55,11 @@ class LogReader:
                 if self.file: self.file.close()
                 self.file = open(self.filepath, 'r')
                 self.inode = current_inode
-                if "driver_master" in self.filepath.name:
-                    self.file.seek(0, 2) 
+                if self.first_open and self.start_at_end:
+                    self.file.seek(0, 2)
                 else:
                     self.file.seek(0)
+                self.first_open = False
 
             lines = self.file.read()
             if lines: 
@@ -67,6 +69,11 @@ class LogReader:
                 if self.parse_status and self.status_callback:
                     status_changed = False
                     for line in lines.split('\n'):
+                        if self.re_engine.search(line):
+                            global_state.task_statuses = {}
+                            status_changed = True
+                            continue
+
                         m = self.re_start.search(line)
                         if m:
                             tid = int(m.group(1))
@@ -81,11 +88,11 @@ class LogReader:
                             status_changed = True
                             continue
 
-                        if self.re_abort.search(line) or self.re_error.search(line):
-                             m = self.re_abort.search(line) or self.re_error.search(line)
-                             tid = int(m.group(1))
-                             global_state.task_statuses[tid] = "ERROR"
-                             status_changed = True
+                        m = self.re_error.search(line)
+                        if m:
+                            tid = int(m.group(1))
+                            global_state.task_statuses[tid] = "ERROR"
+                            status_changed = True
 
                     if status_changed:
                         self.status_callback()
@@ -148,25 +155,24 @@ class RemoteLogReader:
         self.ui_log.clear()
 
 # --- SYSTEM CHECKS ---
-def check_existing_process():
+def driver_process_running():
     try:
         cmd = ["pgrep", "-a", "-f", "run_auto_obs.py"]
         output = subprocess.check_output(cmd).decode().strip()
-        
-        real_process_found = False
+
         if output:
             for line in output.split('\n'):
                 if any(x in line for x in ["vi ", "vim ", "nano ", "tail ", "grep "]): continue
                 if "python" in line and "run_auto_obs.py" in line:
-                    real_process_found = True
-                    break
-        
-        if real_process_found:
-            if not global_state.running: global_state.running = True
-        else:
-            if global_state.running: global_state.running = False
-                
-    except subprocess.CalledProcessError:
+                    return True
+    except Exception:
+        pass
+    return False
+
+def check_existing_process():
+    if driver_process_running():
+        if not global_state.running: global_state.running = True
+    else:
         if global_state.running: global_state.running = False
 
 # --- UI ENTRY POINT ---
@@ -291,9 +297,6 @@ def main_page():
             global_state.task_statuses = {}
             update_table()
 
-            with open(obs_utils.DRIVER_LOG_FILE, 'a') as f:
-                f.write(f"\n\n--- NEW SESSION START: {json.dumps(Path.cwd().name)} ---\n")
-
             temp_file = obs_utils.SCHEDULE_DIR / ".active_run.json"
             clean_data = {"version": obs_utils.DATA_VERSION, "schedule": []}
             for t in valid_tasks:
@@ -304,11 +307,9 @@ def main_page():
 
             with open(temp_file, 'w') as f: json.dump(clean_data, f, indent=4)
 
-            log_file_handle = open(obs_utils.DRIVER_LOG_FILE, 'a')
-            
             global_state.process = subprocess.Popen(
                 ["python3", str(obs_utils.DRIVER_SCRIPT), str(temp_file)],
-                stdout=log_file_handle, stderr=subprocess.STDOUT, preexec_fn=os.setsid 
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid
             )
             global_state.running = True
             update_status_ui()
@@ -320,7 +321,7 @@ def main_page():
     def stop_observation():
         try:
             subprocess.run(["pkill", "-f", "run_auto_obs.py"])
-            with open(obs_utils.DRIVER_LOG_FILE, 'a') as f: f.write("\n>>> ABORT SIGNAL SENT (pkill) <<<\n")
+            with open(obs_utils.ACTIVE_DRIVER_LOG, 'a') as f: f.write("\n>>> ABORT SIGNAL SENT (pkill) <<<\n")
         except Exception as e: ui.notify(f"Stop Error: {e}")
 
     app.on_disconnect(lambda: [r.stop() for r in active_readers])
@@ -394,7 +395,11 @@ def main_page():
             ui.label("Driver Output").classes('font-bold text-gray-600')
             driver_log = ui.log(max_lines=1000).classes('w-full h-[600px] bg-black text-white font-mono rounded p-2 text-xs')
             
-            local_reader = LogReader(obs_utils.DRIVER_LOG_FILE, driver_log, parse_status=True, status_callback=update_table)
+            # Attach to a driver already running (e.g. launched from a terminal): replay
+            # the active session from the top; otherwise park at EOF so a stale log
+            # from a past session is not replayed into a fresh GUI.
+            local_reader = LogReader(obs_utils.ACTIVE_DRIVER_LOG, driver_log, parse_status=True,
+                                     status_callback=update_table, start_at_end=not driver_process_running())
             ui.timer(0.5, local_reader.read)
 
         for ant in obs_utils.ACTIVE_ANTENNAS:

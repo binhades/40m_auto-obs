@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 
 # --- VERSION CONTROL ---
-UTILS_VERSION = "v0.3.10 (Duration Fix)"
+UTILS_VERSION = "v0.3.11 (Active Driver Log)"
 DATA_VERSION = "v0.1.0"
 
 # --- 1. GLOBAL PATHS ---
@@ -18,7 +18,7 @@ DRIVER_SCRIPT = USER_HOME / "observe/run_auto_obs.py"
 WORKER_SCRIPT = SCRIPT_DIR / "run_data_recorder.sh"
 
 # Log Files
-DRIVER_LOG_FILE = LOG_DIR / "driver_master.log"
+ACTIVE_DRIVER_LOG = LOG_DIR / "active_driver_session.log"
 
 SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)

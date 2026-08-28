@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ==================================================================
 # FAST Core Array - Concurrent Python Driver
-# Version: v0.1.6
-# Updates: Remote worker cleanup on abort; reap worker ssh sessions
+# Version: v0.1.7
+# Updates: Session log at ~/log/active_driver_session.log (old rotated to driver_session_<session start>.log); fatal errors logged to file
 # ==================================================================
 
 import asyncio
@@ -10,9 +10,11 @@ import json
 import os
 import sys
 import argparse
+import re
 import signal
 import subprocess
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -27,7 +29,20 @@ import roach_tools # <--- Pure Library
 # --- GLOBAL TRACKING ---
 active_subprocesses = set()
 dry_run_mode = False
-session_log_path = obs_utils.LOG_DIR / f"driver_session_{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+session_log_path = obs_utils.LOG_DIR / "active_driver_session.log"
+if session_log_path.exists():
+    # Archive name = when that session started (its first log line timestamp),
+    # matching the sh driver convention; fall back to rotation time if unreadable.
+    archive_ts = datetime.now().strftime('%Y%m%d-%H%M%S')
+    try:
+        with open(session_log_path) as f:
+            first_line = f.readline().strip()
+        m = re.match(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", first_line)
+        if m:
+            archive_ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").strftime('%Y%m%d-%H%M%S')
+    except Exception:
+        pass
+    os.rename(session_log_path, obs_utils.LOG_DIR / f"driver_session_{archive_ts}.log")
 
 def log(msg):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -301,4 +316,11 @@ if __name__ == "__main__":
     except:
         log("WARNING: Could not verify system clock sync!")
 
-    asyncio.run(main_loop(args.schedule_file, args.dry_run))
+    try:
+        asyncio.run(main_loop(args.schedule_file, args.dry_run))
+    except SystemExit:
+        raise
+    except BaseException as e:
+        log(f"DRIVER FATAL: {type(e).__name__}: {e}")
+        log(traceback.format_exc().strip())
+        raise
