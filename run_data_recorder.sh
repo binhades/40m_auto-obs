@@ -14,6 +14,7 @@ cleanup() {
 # orphan and keep holding the multicast sockets (CA03 incident 2026-08-24..28).
 trap cleanup SIGHUP SIGINT SIGTERM EXIT
 
+BASE_ROOT="${DATA0:-/disk}"
 DATA_ROOT="${DATA0:-/disk}"
 LOG_ROOT="${HOME}/log"
 MY_HOSTNAME=$(hostname)
@@ -88,9 +89,9 @@ day_dir=$(date -d "$timestamp" +%Y%m%d)
 
 
 if [ "$bb_en" = true ]; then
-    save_dir="${DATA_ROOT}/baseband_40m/${proj_id}/${source_name}/${day_dir}"
+    save_dir="${BASE_ROOT}/baseband_40m/${proj_id}/${source_name}/${day_dir}"
 else
-    save_dir="${DATA_ROOT}/${proj_id}/${source_name}/${day_dir}"
+    save_dir="${DATA_ROOT}/corearray_40m/${proj_id}/${source_name}/${day_dir}"
 fi
 mkdir -p "$save_dir"
 
