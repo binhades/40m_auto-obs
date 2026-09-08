@@ -1,0 +1,9 @@
+# Per-antenna RF gain offsets (dB) for the FAST 40m Core Array.
+# actual_pol_gain = schedule_rfgain + offset_from_this_table
+# One line per antenna: <ant>, <pol0_dB (I/Pol-A)>, <pol1_dB (Q/Pol-B)>
+# Lines starting with # are comments. Edit on atlas takes effect at the next
+# task's configuration window (table is loaded when RoachController is created).
+CA01, 0, 0
+CA02, 0.5, 3
+CA03, -3.5, -3.5
+CA04, 3, 3
