@@ -12,7 +12,7 @@ current_dir = Path(__file__).parent.resolve()
 if str(current_dir) not in sys.path: sys.path.append(str(current_dir))
 import obs_utils
 
-VERSION = "v0.2.8 (Delete Validation Fix)"
+VERSION = "v0.2.10 (Localhost Bind)"
 
 @ui.page('/')
 def main_page():
@@ -48,7 +48,7 @@ def main_page():
 
         # --- BUG FIX: Strip UI fields before strict schema validation ---
         for task in data.get("schedule", []):
-            for k in ['ant_display', 'backend_display', '_ui_id', '_status', '_msg', '_class']:
+            for k in ['ant_display', 'backend_display', 'dgain_display', '_ui_id', '_status', '_msg', '_class']:
                 task.pop(k, None)
         # ----------------------------------------------------------------
 
@@ -67,9 +67,21 @@ def main_page():
             task['ant_display'] = ", ".join(task.get('antennas', []))
             modes = []
             if task.get('baseband_enabled'): modes.append("Baseband")
-            if task.get('spec_enabled'): modes.append(f"Spec")
-            if task.get('psr_enabled'): modes.append(f"PSR")
+            if task.get('spec_enabled'):
+                modes.append(f"Spec({task.get('spec_integ', '?')}, {task.get('spec_mode', '?')})")
+            if task.get('psr_enabled'):
+                modes.append(f"PSR({task.get('psr_integ', '?')}, {task.get('psr_mode', '?')})")
             task['backend_display'] = " + ".join(modes) if modes else "-"
+
+            dg = task.get('dgain')
+            if dg is None:
+                task['dgain_display'] = "-"
+            else:
+                try:
+                    d = int(dg, 16) if str(dg).lower().startswith("0x") else int(dg)
+                    task['dgain_display'] = f"0x{d:04X}"
+                except (TypeError, ValueError):
+                    task['dgain_display'] = str(dg)
 
             # --- MULTI-ROW STATUS LOGIC ---
             if is_valid:
@@ -154,7 +166,7 @@ def main_page():
             data_to_save = {"version": state['data'].get("version", "v1"), "schedule": []}
             for task in state['data']["schedule"]:
                 clean = task.copy()
-                for k in ['ant_display', 'backend_display', '_ui_id', '_status', '_msg', '_class']: 
+                for k in ['ant_display', 'backend_display', 'dgain_display', '_ui_id', '_status', '_msg', '_class']:
                     if k in clean: del clean[k]
                 data_to_save["schedule"].append(clean)
 
@@ -207,9 +219,9 @@ def main_page():
                 {'name': 'start_time_cst', 'label': 'Start (CST)', 'field': 'start_time_cst', 'align': 'left'},
                 {'name': 'duration', 'label': 'Len', 'field': 'duration', 'align': 'left'},
                 {'name': 'mode', 'label': 'Mode', 'field': 'mode', 'align': 'left'},
-                {'name': 'ra', 'label': 'RA', 'field': 'ra', 'align': 'left'},
-                {'name': 'dec', 'label': 'DEC', 'field': 'dec', 'align': 'left'},
                 {'name': 'backends', 'label': 'Backends', 'field': 'backend_display', 'align': 'left'},
+                {'name': 'rfgain', 'label': 'RF Gain', 'field': 'rfgain', 'align': 'left'},
+                {'name': 'dgain_display', 'label': 'DGain', 'field': 'dgain_display', 'align': 'left'},
                 {'name': 'antennas', 'label': 'Antennas', 'field': 'ant_display', 'align': 'left'},
                 {'name': 'action', 'label': 'Action', 'field': 'action', 'align': 'center'},
             ]
@@ -227,9 +239,9 @@ def main_page():
                     <q-td key="start_time_cst" :props="props">{{ props.row.start_time_cst }}</q-td>
                     <q-td key="duration" :props="props">{{ props.row.duration }}</q-td>
                     <q-td key="mode" :props="props">{{ props.row.mode }}</q-td>
-                    <q-td key="ra" :props="props">{{ props.row.ra }}</q-td>
-                    <q-td key="dec" :props="props">{{ props.row.dec }}</q-td>
                     <q-td key="backends" :props="props">{{ props.row.backend_display }}</q-td>
+                    <q-td key="rfgain" :props="props">{{ props.row.rfgain }}</q-td>
+                    <q-td key="dgain_display" :props="props">{{ props.row.dgain_display }}</q-td>
                     <q-td key="antennas" :props="props">{{ props.row.ant_display }}</q-td>
                     <q-td key="action" :props="props">
                         <q-btn icon="delete" color="negative" flat dense round @click="$parent.$emit('delete', props.row._ui_id)" />
@@ -244,4 +256,6 @@ def main_page():
                 save_btn.disable()
 
 if __name__ in {"__main__", "__mp_main__"}:
-    ui.run(title='FAST Uploader', host='0.0.0.0', port=8081, reload=False)
+    # Loopback-only bind: the network entry point is the nginx reverse proxy
+    # (https://atlas/uploader/ -> 127.0.0.1:8081).
+    ui.run(title='FAST Uploader', host='127.0.0.1', port=8081, reload=False)
