@@ -14,8 +14,8 @@ cleanup() {
 # orphan and keep holding the multicast sockets (CA03 incident 2026-08-24..28).
 trap cleanup SIGHUP SIGINT SIGTERM EXIT
 
-BASE_ROOT="${DATA0:-/disk}"
-DATA_ROOT="${DATA0:-/disk}"
+BASE_ROOT="${DATA0:-/disk}" # data0: /dish
+DATA_ROOT="${DATA3:-/disk}" # data3: /data7
 LOG_ROOT="${HOME}/log"
 MY_HOSTNAME=$(hostname)
 SRC_ROOT="${HOME}/scripts"
