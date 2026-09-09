@@ -1,0 +1,48 @@
+On atlas:
+
+vi /etc/systemd/system/obs-mon.service
+
+sudo systemctl daemon_reload
+sudo systemctl enable  obs-mon
+sudo systemctl start   obs-mon
+sudo systemctl restart obs-mon
+sudo systemctl status  obs-mon
+
+
+=============== obs-mon.service ============
+[Unit]
+Description=FAST ROACH2 Board Monitor
+After=network.target
+
+[Service]
+User=obs
+Group=obs
+
+WorkingDirectory=/home/obs/observe
+ExecStart=/home/obs/venv/observe/bin/python3 /home/obs/observe/obs_monitor.py
+
+# Same proxy-unset as the other services: the server must not route
+# web/KATCP traffic through the SOCKS proxy.
+Environment="http_proxy="
+Environment="https_proxy="
+Environment="HTTP_PROXY="
+Environment="HTTPS_PROXY="
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+==========================================
+
+Firewall (once):
+
+sudo firewall-cmd --zone=work --add-port=8083/tcp --permanent
+sudo firewall-cmd --reload
+
+Notes:
+- Port 8083 (scheduler 8080, uploader 8081, controller 8082, monitor 8083).
+- Monitor log: ~/log/roach_monitor_YYYYMMDD.log (JSONL, rotates by date).
+- The service polls the ROACH2 boards 24/7, including when no browser is
+  open; restarting it only loses the in-memory 12 h plot history, never the
+  log files.
