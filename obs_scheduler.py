@@ -10,7 +10,7 @@ current_dir = Path(__file__).parent.resolve()
 if str(current_dir) not in sys.path: sys.path.append(str(current_dir))
 import obs_utils
 
-SCRIPT_VERSION = "v0.3.3 (Strict Schema Compatible)"
+SCRIPT_VERSION = "v0.3.6 (Localhost Bind)"
 
 # --- State Management ---
 schedule = []
@@ -32,19 +32,22 @@ def handle_baseband_change():
         spec_check.disable(); psr_check.disable()
         spec_time_input.disable(); spec_mode_input.disable()
         psr_time_input.disable(); psr_mode_input.disable()
+        dgain_input.disable()
     else:
         spec_check.enable(); psr_check.enable()
 
 def handle_std_backend_change():
-    if spec_check.value: 
+    if spec_check.value:
         spec_time_input.enable(); spec_mode_input.enable()
-    else: 
+    else:
         spec_time_input.disable(); spec_mode_input.disable()
-    
-    if psr_check.value: 
+
+    if psr_check.value:
         psr_time_input.enable(); psr_mode_input.enable()
-    else: 
+        dgain_input.enable()
+    else:
         psr_time_input.disable(); psr_mode_input.disable()
+        dgain_input.disable()
 
     if spec_check.value or psr_check.value:
         baseband_check.set_value(False); baseband_check.disable()
@@ -63,6 +66,22 @@ def add_row():
 
         selected_ants = [ant for ant, cb in ant_checkboxes.items() if cb.value]
         if not selected_ants: return ui.notify("Error: Select at least one Antenna!", type='negative')
+
+        # rfgain must be entered by hand (blank form); 0 dB is a legal value, so the
+        # empty-params truthiness loop above must not be reused for it.
+        if rfgain_input.value is None:
+            return ui.notify("Error: 'RF Gain' not set! (-11.5 to +20.0 dB)", type='negative')
+
+        dgain_val = None
+        if psr_check.value:
+            try:
+                s = str(dgain_input.value).strip().lower()
+                dgain_val = int(s, 16) if s.startswith("0x") else int(s)
+            except ValueError:
+                return ui.notify("Error: DGain must be an integer (hex like 0x0E60 or decimal)",
+                                 type='negative')
+            if not (0 <= dgain_val <= 0xFFFF):
+                return ui.notify("Error: DGain out of range (0-65535)", type='negative')
 
         final_spec_mode = "W,N" if spec_check.value and spec_mode_input.value == "W & N" else "F"
 
@@ -100,7 +119,10 @@ def add_row():
             "baseband_enabled": baseband_check.value,
             "cal_on": round(float(cal_on_input.value), 1),
             "cal_off": round(float(cal_off_input.value), 1),
+            "rfgain": float(rfgain_input.value),
+            "dgain": dgain_val,
             "backend_display": " + ".join(modes_desc),
+            "dgain_display": f"0x{dgain_val:04X}" if dgain_val is not None else "-",
             "ant_display": ", ".join(selected_ants)
         }
         
@@ -108,12 +130,12 @@ def add_row():
         test_schedule = {"version": obs_utils.DATA_VERSION, "schedule": []}
         for t in schedule:
             clean = t.copy()
-            for k in ['id', 'backend_display', 'ant_display']: 
+            for k in ['id', 'backend_display', 'dgain_display', 'ant_display']:
                 if k in clean: del clean[k]
             test_schedule["schedule"].append(clean)
-        
+
         clean_new = new_obs.copy()
-        for k in ['id', 'backend_display', 'ant_display']: 
+        for k in ['id', 'backend_display', 'dgain_display', 'ant_display']:
             if k in clean_new: del clean_new[k]
         test_schedule["schedule"].append(clean_new)
         
@@ -149,7 +171,7 @@ def download_json():
     for item in schedule:
         clean_item = item.copy()
         # Strip out the display-only variables so the saved JSON perfectly matches ALLOWED_FIELDS
-        del clean_item['id'], clean_item['backend_display'], clean_item['ant_display']
+        del clean_item['id'], clean_item['backend_display'], clean_item['dgain_display'], clean_item['ant_display']
         clean_schedule.append(clean_item)
     
     ui.download(json.dumps({"version": obs_utils.DATA_VERSION, "schedule": clean_schedule}, indent=4).encode('utf-8'), 'schedule.json')
@@ -221,6 +243,14 @@ with ui.card().classes('w-full max-w-7xl mx-auto p-4'):
                 cal_off_input = ui.number(label='Off', value=0.0, step=0.1, suffix='s').classes('w-24')
 
         with ui.column().classes('gap-1'):
+            ui.label("Gains").classes('text-xs font-bold text-gray-500')
+            with ui.row().classes('gap-2 items-center border p-3 rounded bg-gray-50 h-full'):
+                rfgain_input = ui.number(label='RF Gain', value=None, min=-11.5, max=20.0,
+                                         step=0.5, suffix='dB').classes('w-28')
+                dgain_input = ui.input(label='DGain', placeholder='0x0E60').classes('w-28')
+                dgain_input.disable()
+
+        with ui.column().classes('gap-1'):
             ui.label("Antenna Selection").classes('text-xs font-bold text-gray-500')
             with ui.row().classes('gap-4 items-center border p-4 rounded bg-gray-50 h-full'):
                 ant_checkboxes = {}
@@ -236,10 +266,12 @@ with ui.card().classes('w-full max-w-7xl mx-auto p-4'):
     ui.separator().classes('my-4')
     columns = [
         {'name': 'source', 'label': 'Source', 'field': 'source', 'align': 'left'},
-        {'name': 'start_time_cst', 'label': 'Start', 'field': 'start_time_cst', 'align': 'left'},
+        {'name': 'start_time_cst', 'label': 'Start (CST)', 'field': 'start_time_cst', 'align': 'left'},
         {'name': 'duration', 'label': 'Len', 'field': 'duration', 'align': 'left'},
         {'name': 'mode', 'label': 'Mode', 'field': 'mode', 'align': 'left'},
         {'name': 'backend_display', 'label': 'Backends', 'field': 'backend_display', 'align': 'left'},
+        {'name': 'rfgain', 'label': 'RF Gain', 'field': 'rfgain', 'align': 'left'},
+        {'name': 'dgain_display', 'label': 'DGain', 'field': 'dgain_display', 'align': 'left'},
         {'name': 'ant_display', 'label': 'Antennas', 'field': 'ant_display', 'align': 'left'},
         {'name': 'actions', 'label': 'Action', 'field': 'actions', 'align': 'center'},
     ]
@@ -252,4 +284,6 @@ with ui.card().classes('w-full max-w-7xl mx-auto p-4'):
         ui.space()
         ui.button('Download JSON', on_click=download_json, icon='file_download').classes('bg-blue-600')
 
-ui.run(title=f'FAST Scheduler {SCRIPT_VERSION}', host='0.0.0.0', port=8080, reload=False, show=False)
+# Loopback-only bind: the network entry point is the nginx reverse proxy
+# (https://atlas/scheduler/ -> 127.0.0.1:8080).
+ui.run(title=f'FAST Scheduler {SCRIPT_VERSION}', host='127.0.0.1', port=8080, reload=False, show=False)
