@@ -1,12 +1,12 @@
 #!/bin/bash
 # ==================================================================
 # FAST Core Array - Observation Driver
-# Version: v0.2.7
-# Updates: Duration m/h support, null-safe modes, SIGHUP, disk check
+# Version: v0.2.8
+# Updates: Board config moved into the T-20s window; wordwrite replies checked
 # ==================================================================
 
 # --- CONFIGURATION ---
-DRIVER_VERSION="v0.2.7"          # The version of THIS script
+DRIVER_VERSION="v0.2.8"          # The version of THIS script
 SUPPORTED_DATA_VERSION="v0.1.0"  # The JSON format version this script understands
 
 JSON_FILE="${1:-${HOME}/schedule/schedule.json}"
@@ -68,20 +68,33 @@ task_count=$(jq '.schedule | length' "$JSON_FILE")
 echo "Loaded $task_count tasks from $JSON_FILE (Data Format: $json_ver)"
 
 # --- HELPER FUNCTIONS ---
+# Board writes are only confirmed by the KATCP reply — a silent failure here
+# would leave the observation at wrong integration/cal settings.
+kwrite() {
+    local host=$1; local reg=$2; local val=$3
+    local resp
+    resp=$( { echo "?wordwrite $reg 0 $val"; sleep 0.2; } | nc -w 1 $host 7147 2>/dev/null | grep -m1 '^!wordwrite')
+    if [[ "$resp" != "!wordwrite ok"* ]]; then
+        echo "[WARN] $host $reg write unconfirmed (resp: ${resp:-none})"
+    fi
+}
+
 set_acc_len() {
     local host=$1; local val=$2
-    { echo "?wordwrite u0_acc_len 0 $val"; echo "?wordwrite u1_acc_len 0 $val"; } | nc -w 1 $host 7147 > /dev/null
+    kwrite $host u0_acc_len $val
+    kwrite $host u1_acc_len $val
 }
 
 set_noise_cal() {
     local host=$1; local on_sec=$2; local off_sec=$3
     local on_cnt=$(awk -v t="$on_sec" -v f="$FPGA_CLK" 'BEGIN { printf "%.0f", t * f }')
     local off_cnt=$(awk -v t="$off_sec" -v f="$FPGA_CLK" 'BEGIN { printf "%.0f", t * f }')
-    {
-        echo "?wordwrite noisecal_delay_hipart 0 0"; echo "?wordwrite noisecal_delay 0 0"
-        echo "?wordwrite noisecal_on_hipart 0 $(( on_cnt >> 32 ))"; echo "?wordwrite noisecal_on 0 $(( on_cnt & 0xFFFFFFFF ))"
-        echo "?wordwrite noisecal_off_hipart 0 $(( off_cnt >> 32 ))"; echo "?wordwrite noisecal_off 0 $(( off_cnt & 0xFFFFFFFF ))"
-    } | nc -w 1 $host 7147 > /dev/null
+    kwrite $host noisecal_delay_hipart 0
+    kwrite $host noisecal_delay 0
+    kwrite $host noisecal_on_hipart $(( on_cnt >> 32 ))
+    kwrite $host noisecal_on $(( on_cnt & 0xFFFFFFFF ))
+    kwrite $host noisecal_off_hipart $(( off_cnt >> 32 ))
+    kwrite $host noisecal_off $(( off_cnt & 0xFFFFFFFF ))
 }
 
 # --- MAIN LOOP ---
@@ -168,15 +181,18 @@ for (( i=0; i<$task_count; i++ )); do
         continue
     fi
 
+    # Config moved AFTER the wait (v0.2.8): it used to run at iteration start,
+    # hours before T0 — a new session launch would stomp the registers of any
+    # observation already running on those boards (09-08 17:13 incident).
+    wait_sec=$(( remaining_sec - 20 ))
+    if [ $wait_sec -gt 0 ]; then echo "Waiting ${wait_sec}s..."; sleep $wait_sec; fi
+
     echo "Configuring ROACH boards..."
     for ant in $antennas; do
         host=${ROACH_HOSTS[$ant]}
         if [ $roach_acc_val -gt 0 ]; then set_acc_len $host $roach_acc_val; fi
         set_noise_cal $host $cal_on $cal_off
     done
-    
-    wait_sec=$(( remaining_sec - 20 ))
-    if [ $wait_sec -gt 0 ]; then echo "Waiting ${wait_sec}s..."; sleep $wait_sec; fi
 
     # 5. LAUNCH WORKERS
     backends_flag=""
