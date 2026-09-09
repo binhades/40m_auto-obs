@@ -3,9 +3,12 @@ import re
 from pathlib import Path
 from datetime import datetime
 
+# Gain limits live with the hardware layer (roach_tools) - single source of truth.
+from roach_tools import RF_GAIN_MIN_DB, RF_GAIN_MAX_DB
+
 # --- VERSION CONTROL ---
-UTILS_VERSION = "v0.3.11 (Active Driver Log)"
-DATA_VERSION = "v0.1.0"
+UTILS_VERSION = "v0.3.15 (queue file + task uid)"
+DATA_VERSION = "v0.2.0"
 
 # --- 1. GLOBAL PATHS ---
 USER_HOME = Path.home()
@@ -19,6 +22,8 @@ WORKER_SCRIPT = SCRIPT_DIR / "run_data_recorder.sh"
 
 # Log Files
 ACTIVE_DRIVER_LOG = LOG_DIR / "active_driver_session.log"
+# Live task queue: written by the GUI, watched by the driver engine.
+QUEUE_FILE = SCHEDULE_DIR / ".active_queue.json"
 
 SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,16 +60,18 @@ DEC_PATTERN = re.compile(r'^[+-]?\d{1,2}:\d{1,2}:\d{1,2}(\.\d{1,3})?$')
 DURATION_PATTERN = re.compile(r'^\d+[smh]$')
 
 REQUIRED_FIELDS = [
-    "project_id", "observer", "source", "ra", "dec", 
-    "receiver", "mode", "start_time_cst", "duration", "antennas"
+    "project_id", "observer", "source", "ra", "dec",
+    "receiver", "mode", "start_time_cst", "duration", "antennas",
+    "rfgain"
 ]
 
 ALLOWED_FIELDS = [
-    "project_id", "observer", "source", "ra", "dec", 
+    "project_id", "observer", "source", "ra", "dec",
     "receiver", "mode", "start_time_cst", "duration", "antennas",
     "baseband_enabled", "spec_enabled", "psr_enabled",
     "spec_mode", "spec_integ", "psr_mode", "psr_integ",
-    "cal_on", "cal_off"
+    "cal_on", "cal_off",
+    "rfgain", "dgain"
 ]
 
 # --- 5. SHARED LOGIC ---
@@ -81,7 +88,27 @@ def parse_duration(dur_str):
     elif dur_str.endswith('h'): val *= 3600
     return val
 
-def verify_schedule(data):
+def uid_for(task):
+    """Stable task identity from (start_time, source): '20260907120000_B0950+08'.
+    Deterministic, so GUI and driver derive identical uids independently.
+    Callers that build a uid set for a task list apply the '-2'/'-3' dedupe suffix
+    themselves (order-dependent, so it lives with the list, not the task)."""
+    digits = re.sub(r"\D", "", str(task.get("start_time_cst", "")))
+    src = re.sub(r"[^A-Za-z0-9_.+-]", "", str(task.get("source", "")))
+    return f"{digits}_{src}"
+
+def uid_map(tasks):
+    """uid -> task list index, with '-2'/'-3' suffixes on duplicate
+    (start_time, source) pairs, ordered by list position."""
+    seen = {}
+    out = {}
+    for i, task in enumerate(tasks):
+        base = uid_for(task)
+        seen[base] = seen.get(base, 0) + 1
+        out[base if seen[base] == 1 else f"{base}-{seen[base]}"] = i
+    return out
+
+def verify_schedule(data, check_past=True):
     warnings = []
     errors = {} 
 
@@ -129,6 +156,11 @@ def verify_schedule(data):
             if idx in errors: continue 
 
             # --- 4. STRICT VALUE CHECKING ---
+            # Source name becomes a FITS filename on the workers; whitespace breaks
+            # filename parsing downstream.
+            if re.search(r"\s", task["source"]):
+                add_error(idx, "Source name must not contain whitespace.")
+
             if task["mode"] not in VALID_MODES:
                 add_error(idx, f"Invalid mode '{task['mode']}'. Allowed: {', '.join(VALID_MODES)}")
                 
@@ -170,6 +202,37 @@ def verify_schedule(data):
                 if "psr_integ" not in task: add_error(idx, "Missing 'psr_integ'.")
                 elif task["psr_integ"] not in VALID_PSR_INTEG: add_error(idx, "Invalid PSR Integ.")
 
+            # --- 6b. GAIN VALIDATION ---
+            # rfgain is in REQUIRED_FIELDS, but the required-check stringifies, so a
+            # JSON null slips past it - re-check None here.
+            rfg = task.get("rfgain")
+            if rfg is None:
+                add_error(idx, "Missing 'rfgain'.")
+            else:
+                try:
+                    g = float(rfg)
+                    if g < RF_GAIN_MIN_DB or g > RF_GAIN_MAX_DB:
+                        add_error(idx, f"rfgain {g} dB out of range "
+                                       f"({RF_GAIN_MIN_DB} to +{RF_GAIN_MAX_DB} dB).")
+                    elif abs(g * 2 - round(g * 2)) > 1e-6:
+                        add_error(idx, f"rfgain {g} dB must be a multiple of 0.5 dB.")
+                except (TypeError, ValueError):
+                    add_error(idx, f"Invalid rfgain '{rfg}' (must be a number in dB).")
+
+            dgain = task.get("dgain")
+            if psr_en and dgain is None:
+                add_error(idx, "Missing 'dgain' (required when PSR backend is enabled).")
+            elif dgain is not None:
+                # dgain present without PSR is accepted but ignored downstream.
+                try:
+                    if isinstance(dgain, float) and not dgain.is_integer():
+                        raise ValueError
+                    d = int(str(dgain), 16) if str(dgain).lower().startswith("0x") else int(dgain)
+                    if d < 0 or d > 0xFFFF:
+                        add_error(idx, f"dgain {d} out of range (0-65535).")
+                except (TypeError, ValueError):
+                    add_error(idx, f"Invalid dgain '{dgain}' (integer, or hex like 0x0E60).")
+
             # --- 7. TIME & DURATION PARSING ---
             start_ts = None
             end_ts = None
@@ -178,7 +241,7 @@ def verify_schedule(data):
             try:
                 start_dt = datetime.strptime(task["start_time_cst"], "%Y-%m-%dT%H:%M:%S")
                 start_ts = start_dt.timestamp()
-                if start_ts < datetime.now().timestamp():
+                if check_past and start_ts < datetime.now().timestamp():
                     add_error(idx, "Starts in the past.")
             except ValueError: 
                 add_error(idx, f"Invalid Date Format '{task['start_time_cst']}'. Expected YYYY-MM-DDThh:mm:ss.")
